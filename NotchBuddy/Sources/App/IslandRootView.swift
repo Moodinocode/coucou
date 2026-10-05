@@ -478,6 +478,9 @@ struct IslandHeader: View {
                     #endif
                 })
                 TabButton(icon: "plus", view: .upload, state: state)
+                if state.pillModes.count > 1 {
+                    ModeChip(state: state)
+                }
             }
             .padding(.leading, 14)
 
@@ -496,12 +499,16 @@ struct IslandHeader: View {
                 }
                 .buttonStyle(.plain)
 
-                Button(action: { state.soundEnabled.toggle() }) {
-                    Image(systemName: state.soundEnabled ? "speaker.wave.2" : "speaker.slash")
+                // Close; sound lives in Settings. Disabled while a permission card awaits an answer.
+                Button(action: { NotificationCenter.default.post(name: .islandCollapse, object: nil) }) {
+                    Image(systemName: "xmark")
                         .font(.system(size: 14))
                         .foregroundColor(Color(hex: "#8E939C"))
                 }
                 .buttonStyle(.plain)
+                .disabled(state.pendingApproval != nil)
+                .opacity(state.pendingApproval != nil ? 0.4 : 1)
+                .help("Close")
             }
             .padding(.trailing, 16)
         }

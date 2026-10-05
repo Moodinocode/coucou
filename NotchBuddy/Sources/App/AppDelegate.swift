@@ -29,6 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Open Coucou", action: #selector(openIsland), keyEquivalent: "")
         menu.addItem(.separator())
+        let modeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
+        let modeMenu = NSMenu(title: "Mode")
+        modeMenu.delegate = self
+        modeItem.submenu = modeMenu
+        menuNeedsUpdate(modeMenu)
+        menu.addItem(modeItem)
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -47,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         // The island floats above every window; fold it away so it can't cover Settings.
         if AppState.shared.mode == .expanded { islandController?.collapse() }
+        RecentProjectsStore.shared.refresh()
 
         if let w = settingsWindow, w.isVisible {
             placeBelowIsland(w)
@@ -82,6 +89,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.setFrame(frame, display: true)
     }
 
+    @objc private func selectPillMode(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        AppState.shared.switchPillMode(to: id)
+    }
+
     // MARK: - Island setup
 
     private func setupIsland() {
@@ -98,5 +110,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotionPoller.shared.start()
         NotificationCenter.default.addObserver(self, selector: #selector(openSettings),
                                                name: .openFullSettings, object: nil)
+    }
+}
+
+// MARK: - Mode submenu
+
+extension AppDelegate: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let state = AppState.shared
+        for mode in state.pillModes {
+            let item = NSMenuItem(title: mode.displayName, action: #selector(selectPillMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.id
+            item.state = mode.id == state.currentPillModeId ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let edit = NSMenuItem(title: "Edit Modes…", action: #selector(openSettings), keyEquivalent: "")
+        edit.target = self
+        menu.addItem(edit)
     }
 }

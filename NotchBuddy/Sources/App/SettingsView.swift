@@ -463,8 +463,14 @@ struct SettingsView: View {
                     .padding(6)
                 }
 
+                // MARK: My pills
+                CustomPillsSection()
+
+                // MARK: Modes
+                PillModesSection()
+
                 // MARK: Active pills
-                GroupBox("Active pills") {
+                GroupBox(activePillsTitle) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Choose the tools you use. Coucou only shows what you declare here.")
                             .font(.system(size: 11))
@@ -475,8 +481,16 @@ struct SettingsView: View {
                             .foregroundColor(state.activeIntegrations.count >= 4 ? .orange : .secondary)
 
                         Picker("Main", selection: $state.mainPillId) {
-                            ForEach(PillCatalog.available.filter { $0.category == .workspace && !$0.comingSoon }, id: \.id) { def in
+                            let candidates = state.mainPillCandidates
+                            ForEach(candidates.filter { $0.category != .custom }, id: \.id) { def in
                                 Text(def.name).tag(def.id)
+                            }
+                            let custom = candidates.filter { $0.category == .custom }
+                            if !custom.isEmpty {
+                                Divider()
+                                ForEach(custom, id: \.id) { def in
+                                    Text(def.name).tag(def.id)
+                                }
                             }
                         }
                         .onChange(of: state.mainPillId) { _, newId in
@@ -487,7 +501,7 @@ struct SettingsView: View {
 
                         // All categories — main pill shown with "Main" label instead of toggle
                         ForEach(PillCategory.allCases, id: \.self) { cat in
-                            let catPills = PillCatalog.available.filter { $0.category == cat }
+                            let catPills = state.availablePills.filter { $0.category == cat }
                             if !catPills.isEmpty {
                                 Divider()
                                 Text(cat.title)
@@ -838,6 +852,11 @@ struct SettingsView: View {
         }.resume()
     }
 
+    private var activePillsTitle: String {
+        guard state.pillModes.count > 1, let mode = state.currentPillMode else { return "Active pills" }
+        return "Active pills · \(mode.displayName)"
+    }
+
     @ViewBuilder
     private func pillRow(_ def: PillDefinition) -> some View {
         let isMain = def.id == state.mainPillId
@@ -856,6 +875,9 @@ struct SettingsView: View {
                 let keyId = def.id == "ai_anthropic" ? "anthropic-api-key"
                            : def.id == "ai_google"    ? "google-api-key" : "openai-api-key"
                 if KeychainStore.shared.get(keyId) == nil { return "Key not configured" }
+            }
+            if let custom = state.customPill(id: def.id), custom.items.isEmpty, !custom.includeRecent {
+                return "Empty"
             }
             return nil
         }()
