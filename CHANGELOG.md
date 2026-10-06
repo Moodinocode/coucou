@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- External displays: drag the island by its top strip onto another display and drop it there. It returns to the MacBook display when that display is disconnected (or to the main display when the lid is closed), and always starts on the MacBook display.
+
 ## 0.1.2 — October 2, 2026
 
 - Codex support (GitHub build): sessions show up live on the Codex pill, and permission requests get Allow and Deny in the notch. Install from Settings → Codex Hooks, then trust the hooks once with /hooks in Codex (#130) — thanks @lacatu5
