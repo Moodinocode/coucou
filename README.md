@@ -2,11 +2,13 @@
 
 <img src="NotchBuddy/Assets.xcassets/AppIcon.appiconset/icon_256x256.png" width="96" alt="Coucou icon">
 
-# Coucou
+# Coucou — Moodinocode's fork
 
 **A tiny friend that lives in your Mac's notch — or at the top of your screen on Windows and Linux — and keeps an eye on your AI coding agent sessions.**
 
 Approve permissions, watch your agents work, drop a file, chat with Claude — all without leaving what you're doing.
+
+This is a personal fork of [Louis-CFM/coucou](https://github.com/Louis-CFM/coucou), customized for my own day-to-day work.
 
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-black?logo=apple)
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)
@@ -15,20 +17,25 @@ Approve permissions, watch your agents work, drop a file, chat with Claude — a
 ![SwiftUI](https://img.shields.io/badge/SwiftUI-native-0A84FF)
 ![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![GitHub stars](https://img.shields.io/github/stars/Louis-CFM/coucou?style=social)
-
-<img src="docs/media/demo.gif" width="760" alt="Coucou in action">
 
 </div>
 
 ---
 
-## Why
+## About this fork
 
-Some studios showed off gorgeous notch companions… and never let anyone use them.
-**Coucou is the open version.** Every line of code, every animation, every sound — free to use, read, fork and remix.
+Coucou was created by [Louis Raillé](https://louisraille.fr). This repository started as a fork of his project and has been drifting toward what I need every day. It is independent: for the original app, its releases and its support, go to [Louis-CFM/coucou](https://github.com/Louis-CFM/coucou).
 
-Meet **Mochi**: a soft little squircle with big eyes that pops out of your notch, waves hello, follows your cursor with its eyes, gets annoyed when you poke it (and dizzy if you insist), and tells you the moment Claude Code needs you.
+**Mochi** is the character at the centre of it: a soft little squircle with big eyes that pops out of your notch, waves hello, follows your cursor with its eyes, gets annoyed when you poke it (and dizzy if you insist), and tells you the moment Claude Code needs you.
+
+### What this fork adds
+
+- 🗂️ **Modes** — save named sets of active pills and a main pill ("Work", "Personal") and switch between them from the menu bar, a chip in the island header, or a global shortcut (default ⌃⌥M) *(macOS)*.
+- 🧩 **Your own pills** — Settings → My pills: IntelliJ IDEA projects (including your recent ones) and lists of links, with an AWS Console preset. Rename and recolor them, and use them like any other pill *(macOS)*.
+- 🖥️ **External displays** — drag the island by its top strip onto another display and drop it there; it returns to the MacBook display when that display is disconnected *(macOS)*.
+- 🔤 **Agent activity in English** — "Reading · AppState.swift" instead of "Lit · AppState.swift", on Mac, Windows and Linux.
+
+See [CHANGELOG.md](CHANGELOG.md) for the details.
 
 ## Features
 
@@ -45,49 +52,11 @@ Meet **Mochi**: a soft little squircle with big eyes that pops out of your notch
 - 🖥️ **Any Mac, notch or not** — on an iMac, a Mac mini, or a MacBook with its lid closed on an external display, Mochi sits in a small bar at the top of the screen.
 - 🔒 **Private by design** — no telemetry, no account. Keys live in your macOS Keychain, Windows Credential Manager or Linux Secret Service (GNOME Keyring, KWallet). The app only talks to the services you plug in.
 
-<table>
-<tr>
-<td><img src="docs/media/claude-code.png" alt="Claude Code session"></td>
-<td><img src="docs/media/stripe.png" alt="Stripe payments"></td>
-</tr>
-<tr>
-<td><img src="docs/media/chat.png" alt="Chat with Claude"></td>
-<td><img src="docs/media/dizzy.png" alt="Too many hits"></td>
-</tr>
-</table>
-
 ## Install
 
-### Download for macOS
+This fork has no prebuilt downloads: build it from source. For ready-made builds of the original app, see [upstream's releases](https://github.com/Louis-CFM/coucou/releases).
 
-1. Grab the latest `Coucou.zip` from [Releases](https://github.com/Louis-CFM/coucou/releases).
-2. Unzip and move **Coucou.app** to `/Applications`.
-3. Launch it, and click **Open** when macOS asks you to confirm. Updating from 0.1.0? macOS may ask you, once for each key you saved, to let Coucou use it: enter your Mac password and click **Always Allow**.
-
-### Windows
-
-The Windows installer is **temporarily unavailable**. Microsoft Defender wrongly
-flags the unsigned installer as malware; a false-positive report is under review
-at Microsoft and the installer will come back once it is cleared and signed.
-Until then you can [build it from source](#build-from-source).
-
-There is no notch on a PC, so the island slides out of the top edge of the screen
-instead of hiding inside one. See [`windows/README.md`](windows/README.md) for the
-rest of the differences.
-
-### Linux
-
-The first Linux build is out as a beta: download it from [Coucou for Linux 0.1.1 (beta)](https://github.com/Louis-CFM/coucou/releases/tag/linux-v0.1.1), x86_64 only for now. Later versions will be in [Releases](https://github.com/Louis-CFM/coucou/releases) under `linux-v*` tags.
-
-- **AppImage** (any distribution): `chmod +x Coucou-Linux-*.AppImage`, then run it.
-- **Debian / Ubuntu**: `sudo apt install ./Coucou-Linux-*.deb`
-- **Fedora / openSUSE**: `sudo dnf install ./Coucou-Linux-*.rpm`
-
-Check a download with `sha256sum -c SHA256SUMS --ignore-missing`. Gemini CLI, Antigravity and the Google AI and OpenAI chat are macOS only for now.
-
-The island sits on the top edge on compositors with layer-shell — COSMIC, KDE
-Plasma, Hyprland, Sway and other wlroots compositors. GNOME has no layer-shell,
-so there it opens as a regular window. See [`windows/README.md`](windows/README.md#linux).
+There is no notch on a PC, so on Windows and Linux the island slides out of the top edge of the screen instead of hiding inside one. On Linux it sits on the top edge on compositors with layer-shell (COSMIC, KDE Plasma, Hyprland, Sway and other wlroots compositors); GNOME has no layer-shell, so there it opens as a regular window. Gemini CLI, Antigravity and the Google AI and OpenAI chat are macOS only for now. See [`windows/README.md`](windows/README.md) for the rest of the differences.
 
 ### Build from source
 
@@ -95,7 +64,7 @@ so there it opens as a regular window. See [`windows/README.md`](windows/README.
 
 ```bash
 brew install xcodegen
-git clone https://github.com/Louis-CFM/coucou.git
+git clone https://github.com/Moodinocode/coucou.git
 cd coucou/NotchBuddy
 xcodegen
 open NotchBuddy.xcodeproj   # then ⌘R
@@ -104,7 +73,7 @@ open NotchBuddy.xcodeproj   # then ⌘R
 **Windows** — requirements: [Rust](https://rustup.rs), Node 20+, MSVC build tools.
 
 ```powershell
-git clone https://github.com/Louis-CFM/coucou.git
+git clone https://github.com/Moodinocode/coucou.git
 cd coucou/windows
 npm install
 npm run pack                # installer lands in windows/release/
@@ -118,7 +87,7 @@ sudo apt install build-essential pkg-config \
   libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libayatana-appindicator3-dev \
   librsvg2-dev libssl-dev libdbus-1-dev patchelf \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good
-git clone https://github.com/Louis-CFM/coucou.git
+git clone https://github.com/Moodinocode/coucou.git
 cd coucou/windows
 npm install
 npm run pack                # AppImage, .deb and .rpm land in windows/release/
@@ -182,22 +151,13 @@ The macOS app is native Swift 6 / SwiftUI / AppKit with **zero third-party depen
 
 ## Contributing
 
-Issues and PRs are very welcome — new integrations, new emotes, new sounds, bug fixes. See [CONTRIBUTING.md](CONTRIBUTING.md).
+This is a personal fork, shaped around my own workflow. Issues and PRs are welcome here for anything specific to it; for the app in general, contribute to [upstream](https://github.com/Louis-CFM/coucou). The house rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits
 
-Built by [Louis Raillé](https://louisraille.fr) with Claude Code.
-Inspired by the notch-companion concepts shared by design studios — this project is independent and not affiliated with any of them.
+Coucou and Mochi were created by [Louis Raillé](https://louisraille.fr). This fork is maintained by [Moodinocode](https://github.com/Moodinocode), built with Claude Code.
 
 ## License
 
 - **Code:** [MIT](LICENSE) — use it, fork it, learn from it, just keep the copyright notice.
-- **Name, Mochi character, icon, sounds and media:** © Louis Raillé, all rights reserved — see [LICENSE-ASSETS.md](LICENSE-ASSETS.md). Shipping your own fork? Give it your own name and character.
-
-<div align="center">
-
-**If Mochi made you smile, a ⭐ helps a lot.**
-
-[Website](https://louis-cfm.github.io/coucou/) · [Privacy](https://louis-cfm.github.io/coucou/privacy.html) · [Terms](https://louis-cfm.github.io/coucou/terms.html) · [Support](https://louis-cfm.github.io/coucou/support.html)
-
-</div>
+- **Name, Mochi character, icon and sounds:** © Louis Raillé, all rights reserved — see [LICENSE-ASSETS.md](LICENSE-ASSETS.md).
