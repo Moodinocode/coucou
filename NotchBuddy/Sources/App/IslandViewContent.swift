@@ -121,6 +121,10 @@ struct OverviewView: View {
 
     private func openAgentTarget(_ task: AgentTask?) {
         guard let task else { return }
+        if task.id.hasPrefix(CustomPill.idPrefix) {
+            if let pill = state.customPill(id: task.id) { CustomPillLauncher.openPrimary(pill) }
+            return
+        }
         switch task.id {
         case "integration_claude":
             let vscodeBundleId = "com.microsoft.VSCode"
@@ -1253,6 +1257,8 @@ struct IntegrationCardView: View {
         task.id == "integration_notion" && appState.notionLoaded
     }
 
+    private var customPill: CustomPill? { appState.customPill(id: task.id) }
+
     private var statusDot: Color {
         if PillCatalog.definition(for: task.id)?.comingSoon == true { return Color(hex: "#6B7079") }
         let svcErr = task.id == "integration_stripe" ? appState.stripeError
@@ -1315,6 +1321,9 @@ struct IntegrationCardView: View {
                 .transition(.opacity)
         } else if notionHasData {
             NotionCardView()
+                .transition(.opacity)
+        } else if let pill = customPill {
+            CustomPillCardView(pill: pill)
                 .transition(.opacity)
         } else if agentSessionActive {
             // Active session view — reuse overview layout
@@ -2514,12 +2523,32 @@ struct AgentPillsView: View {
     @ObservedObject var state: AppState
     @State private var swapping = false
 
-    private var others: [AgentTask] {
-        state.tasks.filter { $0.id != state.focusId }
+    private static let slots = 4
+
+    private func isDeclared(_ t: AgentTask) -> Bool {
+        t.id == state.mainPillId || state.activeIntegrations.contains(t.id)
     }
 
-    private var displayTasks: [AgentTask] {
-        Array(others.prefix(4))
+    /// Live sessions and pills with a badge never go into the overflow menu.
+    private func isUrgent(_ t: AgentTask) -> Bool {
+        t.pillBadge != nil || !isDeclared(t) || ![.idle, .sleeping].contains(t.state)
+    }
+
+    /// The mode's pills first, then temporary ones (e.g. a VS Code session).
+    private var others: [AgentTask] {
+        let rest = state.tasks.filter { $0.id != state.focusId }
+        return rest.filter(isDeclared) + rest.filter { !isDeclared($0) }
+    }
+
+    /// Up to 4 pills; past that, 3 pills (urgent ones first) plus a "+N" pill listing the rest.
+    private var layout: (visible: [AgentTask], hidden: [AgentTask]) {
+        let all = others
+        guard all.count > Self.slots else { return (all, []) }
+        let keep = Self.slots - 1
+        let urgent = all.filter(isUrgent).prefix(keep)
+        let calm = all.filter { !isUrgent($0) }.prefix(keep - urgent.count)
+        let ids = Set((urgent + calm).map(\.id))
+        return (all.filter { ids.contains($0.id) }, all.filter { !ids.contains($0.id) })
     }
 
     private let columns = [
@@ -2530,20 +2559,61 @@ struct AgentPillsView: View {
     var body: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 0)
+            let layout = layout
             LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(displayTasks) { task in
-                    AgentPill(task: task, state: state, swapping: $swapping) {
-                        swapping = true
-                        state.setFocus(task.id)
-                        SoundEngine.shared.play("blip")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { swapping = false }
-                    }
+                ForEach(layout.visible) { task in
+                    AgentPill(task: task, state: state, swapping: $swapping) { focus(task.id) }
+                }
+                if !layout.hidden.isEmpty {
+                    OverflowPill(hidden: layout.hidden) { focus($0) }
                 }
             }
             .padding(.horizontal, 8)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func focus(_ id: String) {
+        swapping = true
+        state.setFocus(id)
+        SoundEngine.shared.play("blip")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { swapping = false }
+    }
+}
+
+/// The "+N" slot of the pill grid: a menu of the pills that didn't fit.
+private struct OverflowPill: View {
+    let hidden: [AgentTask]
+    let onSelect: (String) -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Menu {
+            ForEach(hidden) { task in
+                Button(task.id == "integration_claude" ? "VS Code" : task.name) { onSelect(task.id) }
+            }
+        } label: {
+            ZStack {
+                Capsule()
+                    .fill(isHovered ? Color.white.opacity(0.08) : Color(hex: "#0E0F11"))
+                Capsule()
+                    .stroke(Color.white.opacity(isHovered ? 0.3 : 0.1), lineWidth: 1)
+                Text("+\(hidden.count)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(isHovered ? Color(hex: "#B0B5BE") : Color(hex: "#6B7079"))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 28)
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .scaleEffect(isHovered ? 1.04 : 1.0)
+        .onHover { hovering in
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) { isHovered = hovering }
+        }
     }
 }
 
@@ -2557,6 +2627,15 @@ struct AgentPill: View {
     // VS Code pill always shows "VS Code" label regardless of active project name
     private var displayName: String {
         task.id == "integration_claude" ? "VS Code" : task.name
+    }
+
+    private var label: some View {
+        Text(displayName)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(isHovered
+                             ? Color(hex: task.color).lighter(by: 0.3)
+                             : Color(hex: "#6B7079"))
+            .lineLimit(1)
     }
 
     var body: some View {
@@ -2576,14 +2655,12 @@ struct AgentPill: View {
                             .padding(.leading, 8)
                         Spacer()
                     }
-                    Text(displayName)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(isHovered
-                                         ? Color(hex: task.color).lighter(by: 0.3)
-                                         : Color(hex: "#6B7079"))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    // Centered on the pill while it clears the bot; longer names shift right of the bot, then truncate.
+                    ViewThatFits(in: .horizontal) {
+                        label.fixedSize().padding(.horizontal, 34)
+                        label.truncationMode(.tail).padding(.leading, 34).padding(.trailing, 10)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)

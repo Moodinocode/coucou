@@ -7,6 +7,7 @@ enum PillCategory: String, CaseIterable {
     case agent
     case ai
     case service
+    case custom
 
     var title: String {
         switch self {
@@ -14,6 +15,7 @@ enum PillCategory: String, CaseIterable {
         case .agent:     return "Agents"
         case .ai:        return "AI for the chat"
         case .service:   return "Services"
+        case .custom:    return "My pills"
         }
     }
 }

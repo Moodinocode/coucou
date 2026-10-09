@@ -372,6 +372,23 @@ final class IslandWindowController: NSWindowController {
         window?.resignKey()
     }
 
+    private func cycleModeWithFeedback() {
+        guard state.pillModes.count > 1, let mode = state.cycleToNextPillMode() else { return }
+        if state.mode == .expanded {
+            SoundEngine.shared.play("blip")
+            return
+        }
+        let message = "\(mode.displayName) mode"
+        state.noteMessage = message
+        fsm.openedExternally()
+        expand(to: .note)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.state.mode == .expanded,
+                  self.state.view == .note, self.state.noteMessage == message else { return }
+            self.collapse()
+        }
+    }
+
     // MARK: - Keyboard (Escape closes)
 
     private func startKeyMonitor() {
@@ -520,6 +537,17 @@ final class IslandWindowController: NSWindowController {
                 if self.state.mode == .hidden || self.state.mode == .compact {
                     self.expand(to: .overview)
                 }
+            }
+        }
+
+        // Global hotkey to cycle pill modes
+        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let keyCode = event.keyCode
+            let pressed = event.modifierFlags.intersection([.command, .control, .option, .shift]).rawValue
+            Task { @MainActor in
+                guard let self, self.state.modeHotkeyEnabled,
+                      pressed == self.state.modeHotkeyFlags, keyCode == self.state.modeHotkeyCode else { return }
+                self.cycleModeWithFeedback()
             }
         }
 

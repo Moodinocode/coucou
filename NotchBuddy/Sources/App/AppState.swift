@@ -72,7 +72,10 @@ final class AppState: ObservableObject {
 
     // The always-on workspace pill (default: VS Code). Persisted.
     @Published var mainPillId: String = PillCatalog.defaultMainPillId {
-        didSet { UserDefaults.standard.set(mainPillId, forKey: "mainPill") }
+        didSet {
+            UserDefaults.standard.set(mainPillId, forKey: "mainPill")
+            writeThroughToCurrentMode()
+        }
     }
 
     // Dynamically fetched model lists for the in-chat picker (keyed by provider)
@@ -175,6 +178,17 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(Int(hotkeyCode), forKey: "hotkeyCode") }
     }
 
+    // Hotkey to cycle pill modes (default ⌃⌥M)
+    @Published var modeHotkeyEnabled: Bool = false {
+        didSet { UserDefaults.standard.set(modeHotkeyEnabled, forKey: "modeHotkeyEnabled") }
+    }
+    var modeHotkeyFlags: UInt = NSEvent.ModifierFlags([.control, .option]).rawValue {
+        didSet { UserDefaults.standard.set(Int(modeHotkeyFlags), forKey: "modeHotkeyFlags") }
+    }
+    var modeHotkeyCode: UInt16 = 46 {  // 'm'
+        didSet { UserDefaults.standard.set(Int(modeHotkeyCode), forKey: "modeHotkeyCode") }
+    }
+
     // Vercel project filter — empty = watch all projects
     @Published var vercelProjectFilter: Set<String> = [] {
         didSet {
@@ -199,8 +213,28 @@ final class AppState: ObservableObject {
             if let data = try? JSONEncoder().encode(Array(activeIntegrations)) {
                 UserDefaults.standard.set(data, forKey: "activeIntegrations")
             }
+            writeThroughToCurrentMode()
         }
     }
+
+    // User-defined pills (IntelliJ projects, links)
+    @Published var customPills: [CustomPill] = [] {
+        didSet {
+            if let data = try? JSONEncoder().encode(customPills) {
+                UserDefaults.standard.set(data, forKey: "customPills")
+            }
+            syncCustomPillTasks()
+        }
+    }
+
+    // Pill modes: named presets of active pills + main pill. The live properties mirror the current one.
+    @Published var pillModes: [PillMode] = [] {
+        didSet { savePillModes() }
+    }
+    @Published var currentPillModeId: String = "" {
+        didSet { UserDefaults.standard.set(currentPillModeId, forKey: "currentModeId") }
+    }
+    private var isApplyingPillMode = false
 
     // Pending API result
     @Published var searchResult: SearchResult? = nil
@@ -260,16 +294,22 @@ final class AppState: ObservableObject {
         if let v = ud.object(forKey: "hotkeyEnabled") as? Bool  { hotkeyEnabled = v }
         if let v = ud.object(forKey: "hotkeyFlags")   as? Int   { hotkeyFlags = UInt(v) }
         if let v = ud.object(forKey: "hotkeyCode")    as? Int   { hotkeyCode = UInt16(v) }
+        if let v = ud.object(forKey: "modeHotkeyEnabled") as? Bool { modeHotkeyEnabled = v }
+        if let v = ud.object(forKey: "modeHotkeyFlags")   as? Int  { modeHotkeyFlags = UInt(v) }
+        if let v = ud.object(forKey: "modeHotkeyCode")    as? Int  { modeHotkeyCode = UInt16(v) }
         if let d = ud.data(forKey: "vercelProjectFilter"),
            let a = try? JSONDecoder().decode([String].self, from: d) { vercelProjectFilter = Set(a) }
         if let d = ud.data(forKey: "n8nWorkflowFilter"),
            let a = try? JSONDecoder().decode([String].self, from: d) { n8nWorkflowFilter = Set(a) }
         if let d = ud.data(forKey: "activeIntegrations"),
            let a = try? JSONDecoder().decode([String].self, from: d) { activeIntegrations = Set(a) }
-        if let v = ud.string(forKey: "mainPill"), !v.isEmpty,
-           PillCatalog.available.contains(where: { $0.id == v && $0.category == .workspace && !$0.comingSoon }) {
+        // Custom pills first: the saved main pill may be one of them.
+        if let d = ud.data(forKey: "customPills"),
+           let a = try? JSONDecoder().decode([CustomPill].self, from: d) { customPills = a }
+        if let v = ud.string(forKey: "mainPill"), !v.isEmpty, isValidMainPill(v) {
             mainPillId = v
         }
+        loadOrMigratePillModes()
 
         // Sync SoundEngine volume on launch
         SoundEngine.shared.volume = Float(soundVolume)
@@ -302,10 +342,10 @@ final class AppState: ObservableObject {
         // mainPillId: always reset, never remove (the active workspace tool)
         // activeIntegrations: also reset (user declared it active, keep it as idle)
         let isProtected = id == mainPillId
-        let isActiveDecl = PillCatalog.definition(for: id) != nil && activeIntegrations.contains(id)
+        let isActiveDecl = pillDefinition(for: id) != nil && activeIntegrations.contains(id)
         if isProtected || isActiveDecl {
             if let idx = tasks.firstIndex(where: { $0.id == id }) {
-                let catalogName = PillCatalog.definition(for: id)?.name
+                let catalogName = pillDefinition(for: id)?.name
                 tasks[idx].state      = .idle
                 tasks[idx].steps      = []
                 tasks[idx].stepIndex  = 0
@@ -349,12 +389,12 @@ final class AppState: ObservableObject {
 
     /// Load catalog pills into tasks, respecting activeIntegrations. Safe to call multiple times.
     func loadIntegrationTasks() {
-        let catalog = PillCatalog.available
+        let catalog = availablePills
         // Sanitize: remove saved IDs not in catalog
         let catalogIds = Set(catalog.map { $0.id })
         activeIntegrations = activeIntegrations.filter { catalogIds.contains($0) }
         // Validate mainPillId: must be a non-comingSoon workspace pill in the catalog
-        if !PillCatalog.available.contains(where: { $0.id == mainPillId && $0.category == .workspace && !$0.comingSoon }) {
+        if !isValidMainPill(mainPillId) {
             mainPillId = PillCatalog.defaultMainPillId
         }
         // mainPillId must never be in activeIntegrations (migration + invariant)
@@ -382,7 +422,7 @@ final class AppState: ObservableObject {
     /// Max 4 non-main pills active at once.
     func toggleIntegration(_ id: String) {
         guard id != mainPillId else { return }
-        guard PillCatalog.available.contains(where: { $0.id == id }) else { return }
+        guard availablePills.contains(where: { $0.id == id }) else { return }
         if activeIntegrations.contains(id) {
             activeIntegrations.remove(id)
             tasks.removeAll { $0.id == id }
@@ -390,7 +430,7 @@ final class AppState: ObservableObject {
         } else {
             guard activeIntegrations.count < 4 else { return }
             activeIntegrations.insert(id)
-            if let def = PillCatalog.available.first(where: { $0.id == id }),
+            if let def = availablePills.first(where: { $0.id == id }),
                !tasks.contains(where: { $0.id == id }) {
                 let task = AgentTask(id: def.id, name: def.name, color: def.color,
                                      state: .idle, steps: [], source: def.source, isIntegration: true)
@@ -404,7 +444,7 @@ final class AppState: ObservableObject {
     /// Sort tasks so catalog pills are in catalog order, undeclared pills sit right after
     /// integration_claude (matching HookServer insertion behaviour), and the rest follows.
     private func sortTasksByCatalog() {
-        let order = PillCatalog.available.enumerated()
+        let order = availablePills.enumerated()
             .reduce(into: [String: Int]()) { $0[$1.element.id] = $1.offset }
         let catalogPills    = tasks.filter { order[$0.id] != nil }
         let undeclaredPills = tasks.filter { order[$0.id] == nil }
@@ -419,6 +459,191 @@ final class AppState: ObservableObject {
         } else {
             tasks = undeclaredPills + sortedCatalog
         }
+    }
+
+    /// Pills that can be the main pill: shipping workspace tools, then the user's custom pills for this build.
+    var mainPillCandidates: [PillDefinition] {
+        PillCatalog.available.filter { $0.category == .workspace && !$0.comingSoon } + customPillDefinitions
+    }
+
+    func isValidMainPill(_ id: String) -> Bool {
+        mainPillCandidates.contains(where: { $0.id == id })
+    }
+
+    // MARK: - Custom pills
+
+    var customPillDefinitions: [PillDefinition] {
+        let kinds = CustomPillKind.availableInBuild
+        return customPills.filter { kinds.contains($0.kind) }.map(\.definition)
+    }
+
+    /// Catalog pills followed by the user's custom pills.
+    var availablePills: [PillDefinition] {
+        PillCatalog.available + customPillDefinitions
+    }
+
+    func pillDefinition(for id: String) -> PillDefinition? {
+        if id.hasPrefix(CustomPill.idPrefix) { return customPill(id: id)?.definition }
+        return PillCatalog.definition(for: id)
+    }
+
+    func customPill(id: String) -> CustomPill? {
+        customPills.first { $0.id == id }
+    }
+
+    func addCustomPill(_ pill: CustomPill) {
+        guard !customPills.contains(where: { $0.id == pill.id }) else { return }
+        customPills.append(pill)
+    }
+
+    func deleteCustomPill(id: String) {
+        customPills.removeAll { $0.id == id }
+    }
+
+    /// Keeps tasks, active pills and every mode consistent with `customPills`. Never writes `customPills`.
+    func syncCustomPillTasks() {
+        let prefix = CustomPill.idPrefix
+        let defs = customPillDefinitions
+        let availableIds = Set(defs.map(\.id))
+
+        if mainPillId.hasPrefix(prefix) && !availableIds.contains(mainPillId) {
+            mainPillId = PillCatalog.defaultMainPillId
+            loadIntegrationTasks()
+        }
+
+        let stale = activeIntegrations.filter { $0.hasPrefix(prefix) && !availableIds.contains($0) }
+        if !stale.isEmpty { activeIntegrations.subtract(stale) }
+
+        var updated = tasks.filter { !$0.id.hasPrefix(prefix) || availableIds.contains($0.id) }
+        for def in defs {
+            if let i = updated.firstIndex(where: { $0.id == def.id }) {
+                updated[i].name  = def.name
+                updated[i].color = def.color
+            }
+        }
+        let tasksChanged = updated != tasks
+        if tasksChanged { tasks = updated }
+        if let f = focusId, f.hasPrefix(prefix), !tasks.contains(where: { $0.id == f }) {
+            focusId = mainPillId
+        }
+
+        let allIds = Set(customPills.map(\.id))
+        var modes = pillModes
+        for i in modes.indices {
+            modes[i].activePills.removeAll { $0.hasPrefix(prefix) && !allIds.contains($0) }
+            if modes[i].mainPillId.hasPrefix(prefix) && !allIds.contains(modes[i].mainPillId) {
+                modes[i].mainPillId = PillCatalog.defaultMainPillId
+            }
+        }
+        if modes != pillModes { pillModes = modes }
+
+        if tasksChanged {
+            syncMode()
+            syncView()
+        }
+    }
+
+    // MARK: - Pill modes
+
+    var currentPillMode: PillMode? {
+        pillModes.first { $0.id == currentPillModeId }
+    }
+
+    func savePillModes() {
+        if let data = try? JSONEncoder().encode(pillModes) {
+            UserDefaults.standard.set(data, forKey: "modes")
+        }
+    }
+
+    /// Loads saved modes and applies the current one, or creates "Default" from today's pills.
+    private func loadOrMigratePillModes() {
+        let ud = UserDefaults.standard
+        isApplyingPillMode = true
+        defer { isApplyingPillMode = false }
+        if let d = ud.data(forKey: "modes"),
+           let modes = try? JSONDecoder().decode([PillMode].self, from: d), !modes.isEmpty {
+            let savedId = ud.string(forKey: "currentModeId")
+            let current = modes.first { $0.id == savedId } ?? modes[0]
+            pillModes = modes
+            currentPillModeId = current.id
+            if isValidMainPill(current.mainPillId) { mainPillId = current.mainPillId }
+            activeIntegrations = Set(current.activePills.filter { $0 != mainPillId }.prefix(PillMode.maxActive))
+        } else {
+            let mode = PillMode(id: PillMode.newID(), name: "Default",
+                                activePills: activeIntegrations.subtracting([mainPillId]).sorted(),
+                                mainPillId: mainPillId)
+            pillModes = [mode]
+            currentPillModeId = mode.id
+        }
+        savePillModes()
+        ud.set(currentPillModeId, forKey: "currentModeId")
+    }
+
+    /// Saves the live active pills and main pill into the current mode (only when they differ).
+    private func writeThroughToCurrentMode() {
+        guard !isApplyingPillMode,
+              let idx = pillModes.firstIndex(where: { $0.id == currentPillModeId }) else { return }
+        var mode = pillModes[idx]
+        mode.activePills = activeIntegrations.subtracting([mainPillId]).sorted()
+        mode.mainPillId  = mainPillId
+        if mode != pillModes[idx] { pillModes[idx] = mode }
+    }
+
+    /// Applies a mode. Refused while a permission card is waiting for an answer.
+    @discardableResult
+    func switchPillMode(to id: String) -> Bool {
+        guard pendingApproval == nil, let mode = pillModes.first(where: { $0.id == id }) else { return false }
+        guard id != currentPillModeId else { return true }
+        isApplyingPillMode = true
+        currentPillModeId = id
+        if isValidMainPill(mode.mainPillId) { mainPillId = mode.mainPillId }
+        activeIntegrations = Set(mode.activePills.filter { $0 != mainPillId }.prefix(PillMode.maxActive))
+        isApplyingPillMode = false
+        loadIntegrationTasks()
+        if let f = focusId, !tasks.contains(where: { $0.id == f }) { focusId = mainPillId }
+        return true
+    }
+
+    /// Switches to the next mode (wrapping). Returns the new mode, or nil if refused or there's only one.
+    @discardableResult
+    func cycleToNextPillMode() -> PillMode? {
+        guard pillModes.count > 1 else { return nil }
+        let idx = pillModes.firstIndex(where: { $0.id == currentPillModeId }) ?? -1
+        let next = pillModes[(idx + 1) % pillModes.count]
+        return switchPillMode(to: next.id) ? next : nil
+    }
+
+    @discardableResult
+    func addPillMode(name: String) -> PillMode {
+        let mode = PillMode(id: PillMode.newID(), name: name, activePills: [], mainPillId: mainPillId)
+        pillModes.append(mode)
+        switchPillMode(to: mode.id)
+        return mode
+    }
+
+    @discardableResult
+    func duplicatePillMode(id: String) -> PillMode? {
+        guard let source = pillModes.first(where: { $0.id == id }) else { return nil }
+        let copy = PillMode(id: PillMode.newID(), name: "\(source.displayName) copy",
+                            activePills: source.activePills, mainPillId: source.mainPillId)
+        pillModes.append(copy)
+        switchPillMode(to: copy.id)
+        return copy
+    }
+
+    func renamePillMode(id: String, name: String) {
+        guard let idx = pillModes.firstIndex(where: { $0.id == id }), pillModes[idx].name != name else { return }
+        pillModes[idx].name = name
+    }
+
+    /// The last mode can't be deleted. Deleting the current mode switches to a neighbour first.
+    func deletePillMode(id: String) {
+        guard pillModes.count > 1, let idx = pillModes.firstIndex(where: { $0.id == id }) else { return }
+        if id == currentPillModeId {
+            let neighbour = pillModes[idx + 1 < pillModes.count ? idx + 1 : idx - 1]
+            guard switchPillMode(to: neighbour.id) else { return }
+        }
+        pillModes.removeAll { $0.id == id }
     }
 
 }

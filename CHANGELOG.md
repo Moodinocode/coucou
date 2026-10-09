@@ -4,6 +4,8 @@
 
 - External displays: drag the island by its top strip onto another display and drop it there. It returns to the MacBook display when that display is disconnected (or to the main display when the lid is closed), and always starts on the MacBook display.
 - Agent activity in the notch is now in English ("Reading · AppState.swift" instead of "Lit · AppState.swift"), on Mac and Windows/Linux.
+- Modes: save named sets of active pills and a main pill ("Work", "Personal") and switch between them from the menu bar (Mode), a chip in the island header (shown once you have 2+ modes) or an optional global shortcut (default ⌃⌥M). Turning pills on or off in Settings saves to the current mode. Your current pills become a "Default" mode on first launch.
+- Your own pills in Settings → My pills: IntelliJ IDEA projects (one or several, plus your recent projects; GitHub build only) and lists of links, with an AWS Console preset. Rename and recolor them, turn them on in Active pills like any other pill, or make one your main pill.
 
 ## 0.1.2 — October 2, 2026
 
