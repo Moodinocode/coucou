@@ -3,6 +3,7 @@
 ## Unreleased
 
 - External displays: drag the island by its top strip onto another display and drop it there. It returns to the MacBook display when that display is disconnected (or to the main display when the lid is closed), and always starts on the MacBook display.
+- Agent activity in the notch is now in English ("Reading · AppState.swift" instead of "Lit · AppState.swift"), on Mac and Windows/Linux.
 
 ## 0.1.2 — October 2, 2026
 

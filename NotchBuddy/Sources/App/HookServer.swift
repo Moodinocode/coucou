@@ -318,7 +318,7 @@ final class HookServer: @unchecked Sendable {
             state.updateTask(id: agentId, state: .working)
             let tool = payload["tool_name"] as? String ?? "Tool"
             let input = payload["tool_input"] as? [String: Any] ?? [:]
-            let step = frenchStep(tool: tool, input: input)
+            let step = stepLabel(tool: tool, input: input)
             appendStep(id: agentId, step: step)
             nbLog("PreToolUse \(tool)")
 
@@ -678,26 +678,26 @@ final class HookServer: @unchecked Sendable {
         return aliases[name.lowercased()] ?? name
     }
 
-    // MARK: - French step labels
+    // MARK: - Step labels
 
-    private func frenchStep(tool: String, input: [String: Any]) -> String {
+    private func stepLabel(tool: String, input: [String: Any]) -> String {
         let labels: [String: String] = [
-            "Bash":        "Exécute",
-            "Read":        "Lit",
-            "Write":       "Écrit",
-            "Edit":        "Modifie",
-            "Glob":        "Cherche",
-            "Grep":        "Recherche",
-            "WebSearch":   "Recherche web",
-            "WebFetch":    "Récupère",
-            "TodoWrite":   "Tâches",
+            "Bash":        "Running",
+            "Read":        "Reading",
+            "Write":       "Writing",
+            "Edit":        "Editing",
+            "Glob":        "Searching",
+            "Grep":        "Searching",
+            "WebSearch":   "Searching the web",
+            "WebFetch":    "Fetching",
+            "TodoWrite":   "Updating tasks",
             "Task":        "Agent",
-            "LS":          "Liste",
-            "MultiEdit":   "Modifie",
-            "NotebookEdit": "Notebook",
+            "LS":          "Listing",
+            "MultiEdit":   "Editing",
+            "NotebookEdit": "Editing notebook",
             // Codex tools
-            "apply_patch": "Modifie",
-            "update_plan": "Tâches",
+            "apply_patch": "Editing",
+            "update_plan": "Updating tasks",
             "spawn_agent": "Agent",
         ]
         var label = labels[tool] ?? tool
@@ -739,19 +739,19 @@ final class HookServer: @unchecked Sendable {
         return label
     }
 
-    /// Infers a French verb from a shell command's first word.
+    /// Infers a verb from a shell command's first word.
     private func bashVerb(_ command: String) -> String {
         let first = command.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
         switch first {
-        case "cat", "bat", "head", "tail", "less", "more", "nl": return "Lit"
-        case "rg", "grep", "find", "fd", "ls", "tree", "wc":    return "Cherche"
+        case "cat", "bat", "head", "tail", "less", "more", "nl": return "Reading"
+        case "rg", "grep", "find", "fd", "ls", "tree", "wc":    return "Searching"
         default: break
         }
         let testRunners = ["pytest", "vitest", "jest", "npm test", "npm run test",
                            "cargo test", "go test", "swift test", "make test",
                            "xcodebuild test", "unittest"]
-        if testRunners.contains(where: { command.contains($0) }) { return "Teste" }
-        return "Exécute"
+        if testRunners.contains(where: { command.contains($0) }) { return "Testing" }
+        return "Running"
     }
 
     /// Collapses whitespace so a multi-line command stays one ticker row.
