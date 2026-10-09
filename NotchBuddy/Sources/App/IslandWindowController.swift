@@ -44,8 +44,15 @@ final class IslandWindowController: NSWindowController {
     private var notchH: CGFloat = IslandConst.notchHeight
     private var hasNotch = true
 
+    // Display the island lives on. Dragging its top strip moves it to another display.
+    private var currentDisplayID: CGDirectDisplayID?
+    private var displayChosenByUser = false
+    private var moveDragStart: NSPoint? = nil
+    private var moveGrabOffset: NSPoint = .zero
+    private var inMoveDrag = false
+
     convenience init() {
-        let screen = Self.notchScreen() ?? NSScreen.main!
+        let screen = Self.homeScreen()
         let geometry = Self.screenGeometry(for: screen)
         let nW = geometry.width
         let nH = geometry.height
@@ -67,6 +74,7 @@ final class IslandWindowController: NSWindowController {
         self.notchW = nW
         self.notchH = nH
         self.hasNotch = geometry.hasNotch
+        self.currentDisplayID = screen.displayID
         setupPanel(screen: screen)
     }
 
@@ -137,6 +145,12 @@ final class IslandWindowController: NSWindowController {
         startPolling()
         startKeyMonitor()
         wireFSM()
+
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.screensChanged() }
+        }
 
         // Make panel key whenever the prompt/chat view becomes active
         // (nonactivatingPanel never auto-becomes key, but TextField needs it)
@@ -223,7 +237,7 @@ final class IslandWindowController: NSWindowController {
         let inIsland = hoverRect.contains(local)
 
         // Toggle click-through
-        let shouldAcceptMouse = inIsland || inAttachDrag || attachDragStart != nil
+        let shouldAcceptMouse = inIsland || inAttachDrag || attachDragStart != nil || moveDragStart != nil
         if panel.ignoresMouseEvents == shouldAcceptMouse {
             panel.ignoresMouseEvents = !shouldAcceptMouse
             if shouldAcceptMouse, let cv = panel.contentView {
@@ -423,6 +437,14 @@ final class IslandWindowController: NSWindowController {
                 self.hoverTimer?.cancel()
                 self.botHoverTimer?.cancel()
                 self.botHovering = false
+                // Top strip (around the notch, not the bot head) moves the island to another display
+                if !self.isBotHit(event.locationInWindow), self.isMoveHandle(event.locationInWindow) {
+                    let mouse = NSEvent.mouseLocation
+                    self.moveDragStart = mouse
+                    let origin = self.islandPanel.frame.origin
+                    self.moveGrabOffset = NSPoint(x: mouse.x - origin.x, y: mouse.y - origin.y)
+                    return
+                }
                 // Drag only starts when clicking directly on the bot head
                 guard self.isBotHit(event.locationInWindow) else { return }
                 self.attachDragStart = NSEvent.mouseLocation
@@ -435,6 +457,12 @@ final class IslandWindowController: NSWindowController {
         NSEvent.addLocalMonitorForEvents(matching: .leftMouseDragged) { [weak self] event in
             guard let self else { return event }
             MainActor.assumeIsolated {
+                if let start = self.moveDragStart {
+                    let m = NSEvent.mouseLocation
+                    if !self.inMoveDrag && hypot(m.x - start.x, m.y - start.y) > 3 { self.inMoveDrag = true }
+                    if self.inMoveDrag { self.followCursor() }
+                    return
+                }
                 guard let start = self.attachDragStart, !self.inAttachDrag else { return }
                 let m = NSEvent.mouseLocation
                 guard hypot(m.x - start.x, m.y - start.y) > 3 else { return }
@@ -470,6 +498,11 @@ final class IslandWindowController: NSWindowController {
                 let hadPendingClick = self.pendingIslandClick
                 let wasDragging     = self.inAttachDrag
                 self.pendingIslandClick = false
+                if self.moveDragStart != nil {
+                    let moved = self.inMoveDrag
+                    self.finishMoveDrag()
+                    if moved { return }
+                }
                 if wasDragging {
                     finishDrag()
                 } else {
@@ -486,8 +519,13 @@ final class IslandWindowController: NSWindowController {
             }
             return event
         }
-        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in
+        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
             finishDrag()
+            Task { @MainActor in
+                guard let self, self.moveDragStart != nil else { return }
+                self.pendingIslandClick = false
+                self.finishMoveDrag()
+            }
         }
 
         // Global hotkey to show island
@@ -803,10 +841,88 @@ final class IslandWindowController: NSWindowController {
         return dx*dx + dy*dy <= radius * radius
     }
 
+    // MARK: - Display placement
+
+    /// The strip at the top of the island, as tall as the notch / menu bar.
+    private func isMoveHandle(_ windowPoint: CGPoint) -> Bool {
+        let island = islandPanel.currentIslandFrame(nw: notchW, nh: notchH)
+        return island.contains(windowPoint) && windowPoint.y >= island.maxY - notchH
+    }
+
+    /// While dragging the top strip, the island follows the cursor.
+    private func followCursor() {
+        let mouse = NSEvent.mouseLocation
+        islandPanel.setFrameOrigin(NSPoint(x: mouse.x - moveGrabOffset.x, y: mouse.y - moveGrabOffset.y))
+    }
+
+    /// Dropped: glide to the top of the display under the cursor (or back to where it was).
+    private func finishMoveDrag() {
+        if inMoveDrag {
+            let mouse = NSEvent.mouseLocation
+            let previous = currentDisplayID
+            let target = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+                ?? NSScreen.screens.first { $0.displayID == previous }
+                ?? Self.homeScreen()
+            place(on: target, animated: true)
+            if target.displayID != previous { SoundEngine.shared.play("blip") }
+            displayChosenByUser = currentDisplayID != Self.homeScreen().displayID
+        }
+        moveDragStart = nil
+        inMoveDrag = false
+    }
+
+    /// Displays were connected, disconnected or rearranged. Stay on a display the user chose while it
+    /// exists; otherwise go home (built-in display, or the main display when the lid is closed).
+    private func screensChanged() {
+        if displayChosenByUser, let id = currentDisplayID,
+           let screen = NSScreen.screens.first(where: { $0.displayID == id }) {
+            place(on: screen)
+        } else {
+            displayChosenByUser = false
+            place(on: Self.homeScreen())
+        }
+    }
+
+    /// Moves the panel to the top-center of `screen` and adopts that display's notch geometry.
+    private func place(on screen: NSScreen, animated: Bool = false) {
+        let geometry = Self.screenGeometry(for: screen)
+        notchW = geometry.width
+        notchH = geometry.height
+        hasNotch = geometry.hasNotch
+        islandPanel.notchWidth  = notchW
+        islandPanel.notchHeight = notchH
+        state.notchWidth  = notchW
+        state.notchHeight = notchH
+        state.hasNotch    = hasNotch
+        let size = islandPanel.frame.size
+        let sf = screen.frame
+        let frame = NSRect(x: sf.midX - size.width / 2, y: sf.maxY - size.height,
+                           width: size.width, height: size.height)
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.28
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+                islandPanel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            islandPanel.setFrame(frame, display: true)
+        }
+        currentDisplayID = screen.displayID
+    }
+
     // MARK: - Notch detection (static)
 
     static func notchScreen() -> NSScreen? {
         NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
+    }
+
+    /// Where the island lives by default: the built-in display, or the main display when there is none
+    /// (lid closed). `NSScreen.screens.first` is the display with the menu bar.
+    static func homeScreen() -> NSScreen {
+        notchScreen()
+            ?? NSScreen.screens.first { CGDisplayIsBuiltin($0.displayID ?? 0) != 0 }
+            ?? NSScreen.screens.first
+            ?? NSScreen.main!
     }
 
     static func screenGeometry(for screen: NSScreen) -> IslandScreenGeometry {
@@ -909,5 +1025,11 @@ func islandSize(mode: IslandMode, view: IslandView,
     case .expanded:
         let layout = IslandConst.viewLayouts[view]!
         return (IslandConst.expandedWidth, layout.height)
+    }
+}
+
+extension NSScreen {
+    var displayID: CGDirectDisplayID? {
+        deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
     }
 }
