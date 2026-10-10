@@ -42,6 +42,9 @@ final class HookServer: @unchecked Sendable {
     private var approvalFDSource: (any DispatchSourceRead)? = nil  // monitors pendingApprovalFD
     private var activeSessionId: String? = nil        // current Claude Code session
     private var focusBeforeApproval: String? = nil    // saved focus to restore after approval
+    private var idleTracker = SessionIdleTracker()    // last hook event per session pill
+    private var idleTimer: DispatchWorkItem? = nil    // one-shot, armed only while a session is tracked
+    private var editorBundleByPill: [String: String] = [:]  // lowercased bundle ID of the app hosting each session
 
     private init() {}
 
@@ -100,6 +103,14 @@ final class HookServer: @unchecked Sendable {
         #if !APPSTORE
         installHookScript()
         #endif
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  let bundleId = app.bundleIdentifier else { return }
+            Task { @MainActor in self?.editorDidQuit(bundleId: bundleId) }
+        }
         Thread.detachNewThread { self.serverThread() }
     }
 
@@ -260,6 +271,8 @@ final class HookServer: @unchecked Sendable {
             return
         }
 
+        if name != "SessionEnd" { noteActivity(pillId: agentId, bundleId: bundleId) }
+
         let focused = state.focusId == agentId
 
         // While a permission request is pending, dismiss when the resolving event arrives,
@@ -377,6 +390,7 @@ final class HookServer: @unchecked Sendable {
 
         case "SessionEnd":
             activeSessionId = nil
+            forgetSession(pillId: agentId)
             state.removeTask(id: agentId)
 
         case "SubagentStart":
@@ -388,6 +402,76 @@ final class HookServer: @unchecked Sendable {
         default:
             break
         }
+    }
+
+    // MARK: - Session liveness
+    // A session that dies without SessionEnd (editor quit or crashed) is ended when the app
+    // hosting it quits, or after SessionIdleTracker.defaultTimeout without any hook event.
+
+    @MainActor
+    private func noteActivity(pillId: String, bundleId: String) {
+        idleTracker.touch(pillId, at: Date())
+        if !bundleId.isEmpty { editorBundleByPill[pillId] = bundleId.lowercased() }
+        armIdleTimerIfNeeded()
+    }
+
+    @MainActor
+    private func forgetSession(pillId: String) {
+        idleTracker.forget(pillId)
+        editorBundleByPill[pillId] = nil
+        if idleTracker.isEmpty {
+            idleTimer?.cancel()
+            idleTimer = nil
+        }
+    }
+
+    /// Schedules one wake-up for the earliest deadline. Nothing is scheduled while no session is tracked.
+    @MainActor
+    private func armIdleTimerIfNeeded() {
+        guard idleTimer == nil, let deadline = idleTracker.nextDeadline else { return }
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.idleTimerFired() }
+        }
+        idleTimer = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(1, deadline.timeIntervalSinceNow), execute: item)
+    }
+
+    @MainActor
+    private func idleTimerFired() {
+        idleTimer = nil
+        let now = Date()
+        // A request waiting for an answer is not idle.
+        if let pending = AppState.shared.pendingApproval?.pillId, idleTracker.lastSeen[pending] != nil {
+            idleTracker.touch(pending, at: now)
+        }
+        for pillId in idleTracker.takeExpired(at: now) {
+            expireSession(pillId: pillId, reason: "idle")
+        }
+        armIdleTimerIfNeeded()
+    }
+
+    @MainActor
+    private func editorDidQuit(bundleId: String) {
+        let quit = bundleId.lowercased()
+        let pills = editorBundleByPill.filter { $0.value == quit }.keys.sorted()
+        guard !pills.isEmpty else { return }
+        // Another instance of the same app may still be running.
+        let stillRunning = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+            .contains { !$0.isTerminated }
+        guard !stillRunning else { return }
+        for pillId in pills { expireSession(pillId: pillId, reason: "editor quit") }
+    }
+
+    /// Same cleanup as SessionEnd: a temporary pill is removed, a declared one goes back to idle.
+    @MainActor
+    private func expireSession(pillId: String, reason: String) {
+        forgetSession(pillId: pillId)
+        let state = AppState.shared
+        guard state.tasks.contains(where: { $0.id == pillId }) else { return }
+        nbLog("Session expired [\(pillId)] (\(reason))")
+        if state.pendingApproval?.pillId == pillId { dismissApprovalCard(note: "Session ended.") }
+        activeSessionId = nil
+        state.removeTask(id: pillId)
     }
 
     // MARK: - Agent validation + dynamic pill
@@ -525,6 +609,7 @@ final class HookServer: @unchecked Sendable {
         }
         pendingApprovalFD = fd
         activeSessionId = sessionId
+        noteActivity(pillId: pillId, bundleId: bundleId)
 
         upsertWorkspaceTask(id: pillId, projectName: projectName, cwd: cwd)
         state.updateTask(id: pillId, state: .approval)

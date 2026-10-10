@@ -24,6 +24,9 @@ jobs:
       - name: Test link filter
         run: bash scripts/test-safe-links.sh
 
+      - name: Test session idle tracker
+        run: bash scripts/test-session-idle.sh
+
       - name: Build
         run: |
           xcodebuild \
