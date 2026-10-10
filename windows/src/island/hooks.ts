@@ -136,6 +136,61 @@ function clearSession() {
   t.pillBadge = null;
 }
 
+/**
+ * A session that dies without SessionEnd (terminal or editor closed, crash) is
+ * ended after this long without a hook event. Same delay as the macOS app.
+ */
+const SESSION_IDLE_MS = 30 * 60 * 1000;
+
+/** Last hook event per session pill. */
+const lastSeen = new Map<string, number>();
+/** One-shot, armed only while a session is tracked: no polling. */
+let idleTimer: number | null = null;
+
+function noteActivity(pillId: string) {
+  lastSeen.set(pillId, Date.now());
+  armIdleTimer();
+}
+
+function forgetSession(pillId: string) {
+  lastSeen.delete(pillId);
+  if (lastSeen.size === 0 && idleTimer != null) {
+    window.clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+}
+
+function armIdleTimer() {
+  if (idleTimer != null || lastSeen.size === 0) return;
+  const deadline = Math.min(...lastSeen.values()) + SESSION_IDLE_MS;
+  idleTimer = window.setTimeout(() => {
+    idleTimer = null;
+    expireIdleSessions();
+    armIdleTimer();
+  }, Math.max(1000, deadline - Date.now()));
+}
+
+/** Same cleanup as SessionEnd: an agent pill is removed, the Claude Code pill goes back to idle. */
+function expireIdleSessions() {
+  const now = Date.now();
+  // A request waiting for an answer is not idle.
+  if (State.pendingApproval && lastSeen.has(CLAUDE_ID)) lastSeen.set(CLAUDE_ID, now);
+  let changed = false;
+  for (const [pillId, seen] of [...lastSeen]) {
+    if (now - seen < SESSION_IDLE_MS) continue;
+    lastSeen.delete(pillId);
+    if (!State.tasks.some((t) => t.id === pillId)) continue;
+    if (pillId === CLAUDE_ID) {
+      State.updateTask(pillId, "idle");
+      clearSession();
+    } else {
+      State.removeTask(pillId);
+    }
+    changed = true;
+  }
+  if (changed) State.notify();
+}
+
 export function registerHookHandlers(island: Island) {
   void onEvent<HookPayload>("hook", (payload) => handleHook(island, payload));
 }
@@ -159,6 +214,8 @@ function handleHook(island: Island, payload: HookPayload) {
   const validAgent = validateAgent(payload.coucou_agent);
   const agentId = validAgent ? `agent_${validAgent}` : CLAUDE_ID;
   const isExternalAgent = validAgent !== null;
+
+  if (name !== "SessionEnd") noteActivity(agentId);
 
   const focused = State.focusId === agentId;
 
@@ -254,6 +311,7 @@ function handleHook(island: Island, payload: HookPayload) {
       break;
 
     case "SessionEnd":
+      forgetSession(agentId);
       if (isExternalAgent) {
         State.removeTask(agentId);
       } else {
